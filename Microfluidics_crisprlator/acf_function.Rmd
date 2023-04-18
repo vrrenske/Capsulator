@@ -1,0 +1,138 @@
+---
+title: "autocorrelation function"
+output: html_notebook
+---
+
+Plot autocorrelation over generation
+
+```{r}
+library(tidyverse)
+
+spots_perchannel <- spots |>  gather("Channel", "Intensity_Mean", c("MEAN_INTENSITY_CH1","MEAN_INTENSITY_CH2", "MEAN_INTENSITY_CH3")) |> type_convert(guess_integer=TRUE)
+
+spots_perchannel <- spots_perchannel |> select(TRACK_ID, POSITION_X, POSITION_Y, POSITION_T, Intensity_Mean, Channel, FRAME) |> distinct()
+
+spots_perchannel <- spots_perchannel |> group_by(Channel, TRACK_ID) |> mutate(Intensity_normalized = (Intensity_Mean-min(Intensity_Mean))/(max(Intensity_Mean-min(Intensity_Mean)))*100)
+
+
+spots_perchannel <- spots_perchannel |> left_join(tracks |> select(TRACK_ID, TRACK_DURATION, TRACK_START) |> type_convert(guess_integer=TRUE)) |> filter(TRACK_DURATION>6000) |> mutate(TIME_REL = POSITION_T-TRACK_START)
+
+##ACF without any lag per timepoint using R base ACF function
+spots_pT <- spots_perchannel |> group_by(Channel, TRACK_ID, TIME_REL, FRAME) |> summarise(IntPerTrack = mean(Intensity_normalized))|> ungroup() |> group_by(Channel, TRACK_ID) |> arrange(TIME_REL, TRACK_ID, Channel) |> mutate(acf_nolag = acf(IntPerTrack,pl=FALSE, lag="none")$acf)
+
+
+ggplot(spots_pT) + geom_line(aes(x=TIME_REL, y= acf_nolag, group=paste(TRACK_ID, Channel), color=Channel), alpha=0.5) + theme_minimal() + geom_line(data=spots_pT |> filter(TRACK_ID==45), aes(x=TIME_REL, y=acf_nolag, color=Channel), size=2)
+
+
+
+ggplot(spots_pT) + geom_line(aes(x=TIME_REL, y= acf_nolag, group=paste(TRACK_ID, Channel), color=Channel), alpha=0.5) + theme_minimal() + geom_line(data=spots_pT, aes(x=TIME_REL, y=mean(acf_nolag)), size=2)
+
+```
+
+
+```{r}
+
+##determine when each generation is starting/splitting; make dataframe with one cell per track (does multiply single cells in the beginning)
+
+all_sub <- all |> 
+  activate(nodes) |> left_join(tracks |> select(TRACK_ID, TRACK_DURATION, TRACK_START) |> distinct()) |> 
+  filter(TRACK_DURATION > 6000) |> 
+  group_by(TRACK_ID) |>
+  mutate(nm = row_number()) |>
+  ungroup() |>
+  to_components()
+
+get_singlecells <- function(subgraph){
+  Root <- subgraph |> filter(node_is_root()) |> select(nm) |> as_tibble()
+  Root <- Root$nm
+  Leafs <- subgraph |> filter(node_is_leaf()) |> select(nm) |> as_tibble()
+  out <- lapply(Leafs$nm, function(x){subgraph <- subgraph |> to_shortest_path(from=Root, to=x)
+    subgraph <- subgraph$shortest_path |> activate(nodes) |> as_tibble() |> mutate(Leaf = x)
+    return(subgraph)})  |> 
+    bind_rows()
+  return(out)
+}
+
+spots_singlecell <- lapply(all_sub, function(x) get_singlecells(x)) |> 
+  bind_rows()|> 
+  gather("Channel", "Intensity_Mean", c("MEAN_INTENSITY_CH1","MEAN_INTENSITY_CH2", "MEAN_INTENSITY_CH3")) |>
+  group_by(Channel, TRACK_ID) |> 
+  mutate(Intensity_normalized = (Intensity_Mean-min(Intensity_Mean))/(max(Intensity_Mean-min(Intensity_Mean)))*100) |>
+  group_by(TRACK_ID, Channel, Leaf) |> 
+  mutate(TIME_REL = POSITION_T-min(POSITION_T)) |>
+  arrange(TIME_REL, .by_group=TRUE)  |>
+  filter(n()>100) |>
+  mutate(acf_percell = acf(Intensity_normalized,pl=FALSE, lag="none")$acf, .drop=TRUE)
+
+#method 1: growth
+spots_singlecell <- spots_singlecell |> 
+  group_by(TRACK_ID, Channel, Leaf) |> 
+  mutate(ELLIPSE_MAJOR = as.numeric(ELLIPSE_MAJOR),
+         peaks = ggpmisc:::find_peaks(ELLIPSE_MAJOR, span=3, ignore_threshold = 0.3),
+         generation = ifelse(peaks, 1, 0),
+         generation = ifelse(peaks, cumsum(generation), 0),
+         generation_n = cummax(generation),
+         peaks_color = ggpmisc:::find_peaks(acf_percell, span=3, ignore_threshold=0.3),
+         peaks_order = ifelse(peaks_color, 1, 0),
+         peaks_order = ifelse(peaks_color, cumsum(peaks_order), 0)
+  ) |>
+  group_by(generation_n, .add=TRUE) |>
+  mutate(growth = row_number(),
+         growth = (growth-min(growth))/(max(growth)-min(growth)),
+         generation_tot = generation_n + growth,
+         generation_time = n()) |>
+  ungroup(generation_n)
+  
+
+generation_med = median(spots_singlecell$generation_time)       
+
+spots_singlecell <- spots_singlecell |> filter(generation_time > generation_med/2, generation_time < generation_med*2)
+
+ggplot(spots_singlecell |> filter(TRACK_ID==44, Leaf==4261), aes(x=POSITION_T, y=ELLIPSE_MAJOR)) + geom_point(aes(color=peaks)) + geom_path()
+
+ggplot(spots_singlecell |> filter(generation>0, TRACK_ID==44)) + 
+  geom_line(aes(x=TIME_REL/60, y=acf_percell, group=paste(Channel,TRACK_ID,Leaf), color=Channel), alpha=0.3) + facet_wrap(~Channel) +
+  geom_smooth(aes(x=TIME_REL/60, y=acf_percell, group=Channel), fill=NA, color="black", size=2) +
+  geom_smooth(aes(x=TIME_REL/60, y=acf_percell, color=Channel), fill=NA) +
+  theme_classic() +
+   scale_color_manual(values=c("MEAN_INTENSITY_CH1" = "#cc183a", "MEAN_INTENSITY_CH2" = "#abd037", "MEAN_INTENSITY_CH3" = "#2986cc")) -> plot_perChannel_time
+
+
+spots_pT <- spots_pT |> left_join(spots_singlecell |> ungroup() |> select(FRAME, generation, peaks, TRACK_ID) |> distinct())
+
+ggplot(spots_singlecell) + 
+  geom_point(aes(x=generation_tot, y=acf_percell, color=Channel), alpha=0.01, size=0.1) + facet_wrap(~generation_time) +
+  geom_smooth(aes(x=generation_tot, y=acf_percell, group=Channel), fill=NA, color="black", size=2) +
+  geom_smooth(aes(x=generation_tot, y=acf_percell, color=Channel), fill=NA) +
+   scale_color_manual(values=c("MEAN_INTENSITY_CH1" = "#cc183a", "MEAN_INTENSITY_CH2" = "#bcff00", "MEAN_INTENSITY_CH3" = "#2986cc"))
+
+```
+
+
+
+
+
+```{r}
+
+#alternative way to calculate acf
+
+
+acf_function <- function(oneGroup){
+  out <- data.frame(
+    acf_out = acf(oneGroup$IntPerTrack, lag.max=nrow(oneGroup), pl=FALSE)$acf,
+    Channel = oneGroup$Channel,
+    TRACK_ID = oneGroup$TRACK_ID,
+    TIME_REL = oneGroup$TIME_REL
+  )
+  return(out)
+}
+
+spots_pT <- spots_pT |>  mutate(CT = paste(Channel, TRACK_ID, sep="_")) 
+
+unique_tracks <- spots_pT |> ungroup() |> select(CT) |> distinct()
+spots_acf <- lapply(c(1:nrow(unique_tracks)), function(x) acf_function(spots_pT |> filter(CT==unique_tracks[x,]))) |> bind_rows()
+
+```
+
+
+

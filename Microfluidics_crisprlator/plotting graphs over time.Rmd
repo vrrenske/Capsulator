@@ -1,0 +1,161 @@
+---
+title: "Tracks_AnneStephanie: pos006007"
+output: html_notebook
+---
+
+ 
+
+```{r}
+library(tidyverse)
+library(ggraph)
+library(tidygraph)
+setwd(choose.dir())
+```
+
+
+```{r}
+
+spots <- read_csv("spots.csv") |> slice(-c(1:3)) |> type_convert(guess_integer=TRUE)
+
+edges <- read_csv("edges.csv") |> slice(-c(1:3)) |> type_convert(guess_integer=TRUE)
+
+tracks <- read_csv("tracks.csv") |> slice(-c(1:3)) |> type_convert(guess_integer=TRUE)
+
+
+##for one track
+
+spots_1 <- spots[spots$TRACK_ID == 0,]
+edges_1 <- edges[edges$TRACK_ID == 0,]
+
+spots_1 <- spots_1 |> 
+  arrange(ID) |> 
+  mutate(numberID = row_number())
+
+edges_1 <- edges_1 |> 
+  left_join(spots_1 |> 
+              select(ID, numberID) |> 
+              rename(SPOT_TARGET_ID = ID, to = numberID)) |> 
+  left_join(spots_1 |> 
+              select(ID, numberID) |> 
+              rename(SPOT_SOURCE_ID = ID, from = numberID)) |> 
+  select(from, to, everything())
+
+test <- tbl_graph(nodes = spots_1 |> 
+                    select(numberID, ID, everything()) |> 
+                    rename(id=numberID, label=ID), 
+                  edges=edges_1, 
+                  directed=T)
+
+ggraph(test) + 
+  geom_edge_diagonal() +  
+  geom_node_point(aes(color=MEAN_INTENSITY_CH1))
+```
+
+
+```{r}
+
+spots_11 <- spots[spots$TRACK_ID <11,]
+edges_11 <- edges[edges$TRACK_ID <11,]
+
+spots_11 <- spots_11 |> 
+  arrange(ID) |> 
+  mutate(numberID = row_number())
+
+edges_11 <- edges_11 |> 
+  left_join(spots_11 |> 
+              select(ID, numberID) |> 
+              rename(SPOT_TARGET_ID = ID, to = numberID)) |> 
+  left_join(spots_11 |> 
+              select(ID, numberID) |> 
+              rename(SPOT_SOURCE_ID = ID, from = numberID)) |> 
+  select(from, to, everything())
+
+test <- tbl_graph(nodes = spots_11 |> select(numberID, ID, everything()) |> rename(id=numberID, label=ID), edges=edges_11, directed=T)
+
+test2 <- ggraph(test) + geom_edge_diagonal() +  geom_node_point(aes(color=MEAN_INTENSITY_CH1), size=3) + scale_color_viridis() 
+
+#test2$data <- test2$data |> mutate(y=POSITION_T/60)
+
+test2 + theme_minimal() + ylab("time(minutes)")
+```
+
+
+```{r}
+
+spots <- spots |> 
+  arrange(ID) |> 
+  mutate(numberID = row_number())
+
+edges<- edges |> 
+  left_join(spots |> 
+              select(ID, numberID) |> 
+              rename(SPOT_TARGET_ID = ID, to = numberID)) |> 
+  left_join(spots |> 
+              select(ID, numberID) |> 
+              rename(SPOT_SOURCE_ID = ID, from = numberID)) |> 
+  select(from, to, everything())
+
+all <- tbl_graph(nodes = spots |> select(numberID, ID, everything()) |> rename(id=numberID, label=ID), edges=edges, directed=T)
+
+plotall <- ggraph(all) + geom_edge_diagonal(aes(color= node.MEAN_INTENSITY_CH1))  + scale_color_viridis() 
+
+#plotall$data <- plotall$data |> mutate(y=POSITION_T/60)
+
+#ggsave(plotall + theme_minimal() + ylab("time(minutes)"), filename="plot_all_ch3.pdf", width=30, height=25)
+
+```
+
+
+
+```{r}
+red <- ggraph(all |> activate(nodes) |> filter(TRACK_ID==44), layout='tree', circular=TRUE) + geom_edge_elbow2(aes(color= node.MEAN_INTENSITY_CH1), edge_width=1, linejoin="bevel", lineend="square")  + scale_edge_color_gradient2(low="black", high="#ffc2cd", mid="#ff084a", midpoint = 270) + theme_void() + theme(legend.position="none") + coord_fixed()
+
+green <- ggraph(all |> activate(nodes) |> filter(TRACK_ID==44), layout='tree', circular=TRUE) + geom_edge_elbow2(aes(color= node.MEAN_INTENSITY_CH2),edge_width=1, linejoin="mitre", lineend="round")  + scale_edge_color_gradient2(low="black", high="#e3ffbf", mid="#92ff09", midpoint = 155) + theme_void() + theme(legend.position="none") + coord_fixed()
+
+blue <- ggraph(all |> activate(nodes) |> filter(TRACK_ID==44), layout='tree', circular=TRUE) + geom_edge_elbow2(aes(color= node.MEAN_INTENSITY_CH3),edge_width=1, linejoin="mitre", lineend="round")  + scale_edge_color_gradient2(low="black", high="#11f9ff", mid="#00c5ff", midpoint = 1250) + theme_void() + theme(legend.position="none") + coord_fixed()
+
+library(patchwork)
+
+red + green + blue
+```
+
+```{r}
+blue_part <- ggraph(all |> activate(nodes) |> filter(TRACK_ID==45), layout='partition', circular=TRUE) + geom_node_arc_bar(aes(fill=MEAN_INTENSITY_CH3), color=NA) +  scale_fill_gradient2(low="black", high="#11f9ff", mid="#00c5ff", midpoint = 1350) + theme_void() + theme(legend.position="none") + coord_fixed() 
+
+green_part <- ggraph(all |> activate(nodes) |> filter(TRACK_ID==45), layout='partition', circular=TRUE) + geom_node_arc_bar(aes(fill=MEAN_INTENSITY_CH2), color=NA) +  scale_fill_gradient2(low="black", high="#e3ffbf", mid="#92ff09", midpoint = 160) + theme_void() + theme(legend.position="none") + coord_fixed() 
+
+red_part <- ggraph(all |> activate(nodes) |> filter(TRACK_ID==45), layout='partition', circular=TRUE) + geom_node_arc_bar(aes(fill=MEAN_INTENSITY_CH1), color=NA) +  scale_fill_gradient2(low="black", high="#ffc2cd", mid="#ff084a", midpoint = 450)  + theme_void() + theme(legend.position="none") + coord_fixed()
+
+
+```
+
+
+
+```{r}
+
+B <- ggraph(all |> activate(nodes) |> filter(TRACK_ID==44), layout='partition', circular=TRUE) + geom_node_arc_bar(aes(fill=MEAN_INTENSITY_CH3), color=NA) +  scale_fill_gradient(low="black", high = "white") + theme_void() + theme(legend.position="none") + coord_fixed() 
+
+G <- ggraph(all |> activate(nodes) |> filter(TRACK_ID==44), layout='partition', circular=TRUE) + geom_node_arc_bar(aes(fill=MEAN_INTENSITY_CH2), color=NA) +  scale_fill_gradient(low="black", high="white") + theme_void() + theme(legend.position="none") + coord_fixed() 
+
+R <- ggraph(all |> activate(nodes) |> filter(TRACK_ID==44), layout='partition', circular=TRUE) + geom_node_arc_bar(aes(fill=MEAN_INTENSITY_CH1), color=NA) +  scale_fill_gradient(low="black", high="white")  + theme_void() + theme(legend.position="none") + coord_fixed()
+
+
+```
+
+
+
+```{r}
+sumall <- edges_full |> select(FRAME, MEAN_INTENSITY_CH1, MEAN_INTENSITY_CH2, MEAN_INTENSITY_CH3) |> pivot_longer(cols = c(MEAN_INTENSITY_CH1, MEAN_INTENSITY_CH2, MEAN_INTENSITY_CH3))
+
+sumall <- sumall |> group_by(FRAME, name) |> summarise(meanv = mean(as.double(value))) |> mutate(FRAME = as.double(FRAME))
+                                                       
+blueline <- ggplot(sumall |> filter(name=="MEAN_INTENSITY_CH3")) + geom_tile(aes(x=FRAME*5, y=1,fill=meanv)) + scale_fill_gradient2(low="black", high="#11f9ff", mid="#00c5ff", midpoint = 1350) + theme_minimal() 
+
+greenline <- ggplot(sumall |> filter(name=="MEAN_INTENSITY_CH2")) + geom_tile(aes(x=FRAME*5, y=1,fill=meanv)) + scale_fill_gradient2(low="black", high="#e3ffbf", mid="#92ff09", midpoint = 155) + theme_minimal() + theme(axis.text.x=element_blank(), axis.title.x=element_blank())
+
+redline <- ggplot(sumall |> filter(name=="MEAN_INTENSITY_CH1")) + geom_tile(aes(x=FRAME*5, y=1,fill=meanv)) + scale_fill_gradient2(low="black", high="#ffc2cd", mid="#ff084a", midpoint = 200) + theme_minimal() + theme(axis.text.x=element_blank(), axis.title.x=element_blank())
+
+
+```
+
+
