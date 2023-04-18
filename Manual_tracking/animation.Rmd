@@ -1,0 +1,93 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+ 
+
+```{r}
+library(tidyverse)
+library(gganimate)
+```
+
+Position 5 & 8:
+
+
+```{r}
+
+RFP <- readxl::read_xlsx(file.choose())
+YFP <- readxl::read_xlsx(file.choose())
+CFP <- readxl::read_xlsx(file.choose())
+
+RFP$Mean_cor <- RFP$Mean - min(RFP$Mean, na.rm=TRUE)
+RFP$'New normalized mean fluo' <- RFP$Mean_cor/max(RFP$Mean_cor,na.rm=TRUE)*100
+CFP$Mean_cor <- CFP$Mean - min(CFP$Mean, na.rm=TRUE)
+CFP$'New normalized mean fluo' <- CFP$Mean_cor/max(CFP$Mean_cor, na.rm=TRUE)*100
+YFP$Mean_cor <- YFP$Mean - min(YFP$Mean, na.rm=TRUE)
+YFP$'New normalized mean fluo' <- YFP$Mean_cor/max(YFP$Mean_cor, na.rm=TRUE)*100
+```
+
+```{r}
+combined <- bactMAP::combineDataframes(list(RFP,YFP,CFP), listofchannels=list("RFP","mNeonGreen","CFP"))$finalframe |>
+  rename(time_h = 'Time (h)',
+         Mean_norm = 'New normalized mean fluo') |>
+  filter(!is.na(time_h))
+```
+
+
+
+```{r}
+
+
+ggplot(combined, aes(x=time_h, y=Mean_norm, color=channel, group = channel)) + 
+  geom_point(aes(group= seq_along(time_h)), size=2) +
+  geom_line() +
+  theme_minimal() +
+  geom_segment(aes(xend=37, yend=Mean_norm, color=channel), linetype=2) +
+  geom_text(aes(x=37, label=sprintf("%5.0f", Mean_norm)), hjust=0, show.legend = F,fontface='bold',color='black', size=6) +
+  scale_color_manual(values=c("RFP" = "#cc183a", "mNeonGreen" = "#bcff00", "CFP" = "#2986cc")) +
+  xlab ("time (hour)") +
+  ylab ("normalized mean fluorescence") +
+  theme(axis.text = element_text(size=16), 
+        legend.text = element_text(size=16), 
+        legend.title=element_text(size=18), 
+        axis.title=element_text(size=18),
+        legend.position = "top") +
+  xlim(c(0,40)) + 
+  transition_reveal(time_h) +
+  view_follow(fixed_x = TRUE, fixed_y = TRUE) -> animation_time
+
+ggplot(combined[combined$channel=="CFP",], aes(x=time_h, y=Length)) + 
+  geom_point(aes(group=seq_along(time_h), color=peak), size=2) +
+  geom_line() +
+  theme_minimal() +
+  xlim(c(0,40)) +
+  theme(axis.text = element_text(size=16), 
+        legend.text = element_text(size=16), 
+        legend.title=element_text(size=18), 
+        axis.title=element_text(size=18),
+        legend.position="top") +
+  xlab("time (hour)") +
+  ylab("cell length") +
+  scale_color_manual(values=c("black", "#cc183a")) +
+  guides(color=guide_legend(title="division")) + 
+  transition_reveal(time_h) +
+  view_follow(fixed_x = TRUE, fixed_y = TRUE)-> plot_cell_lengths
+
+  
+
+
+```
+
+
+
+```{r}
+animate(animation_time, renderer=ffmpeg_renderer(), width=1000, height=700, fps=5)
+
+anim_save("pos005-008.mp4")
+
+animate(plot_cell_lengths, renderer=ffmpeg_renderer(), width=1000, height=400, fps=5)
+
+anim_save("pos005-008-lengths.mp4")
+```
+
