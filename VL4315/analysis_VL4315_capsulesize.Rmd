@@ -1,0 +1,119 @@
+---
+title: "capsule measurement"
+output: html_notebook
+---
+
+## Goal
+
+To measure the amount (intensity and/or thickness) of capsule in each individual cell and relate this to the fluorescence intensity in this given cell. I was not extremely happy with the outcome of a few segmentation programs so I decided to go oldschool for segmentation by phase and then measurement of the surroundings by flourescence in R. I start this with a "test dataset" of only one strain, if it works, I will redo the analysis on all 6 strains I have (always on/off controls, etc).
+
+## Test dataset
+
+* Morphometrics output of phase contrast segmentation of image stack VL4315
+* Image stack VL4315, phase contrast
+* Image stack VL4315, capsule (antibody)
+* Image stack VL4315, mScarlet
+* Image stack VL4315, YFP
+* Image stack VL4315, mTurquoise
+
+## Preparation
+
+```{r}
+
+library(bactMAP)
+library(dplyr)
+library(ggplot2)
+
+setwd("C:/Users/adminuser/Documents/Microscopy Files/Anne-Stephanie/capsulequantification/20210901_capsulequantification/VL4315")
+
+addPixels2um("0.05", 0.05) #the lif file I have has this registered as the pixel conversion factor
+
+#get files (don't need phase)
+morph <- extr_Morphometrics("phase_02-Sep-2021_CONTOURS.mat", mag="0.05")
+capsule <- extr_OriginalStack("capsule.tif")
+mScarlet <- extr_OriginalStack("mSc.tif")
+YFP <- extr_OriginalStack("YFP.tif")
+mTurquoise <- extr_OriginalStack("mTQ.tif")
+```
+
+## Analysis
+
+I decided that the easiest way to go is to take a certain amount of pixels/micron outside the phase-contrast segmentation. The nice thing is also that in this way, you won't have to do another segmentation step and just can use the analysis in one go. 
+
+The idea:
+
+* Take & convert phase-contrast data
+* Use the function gBuffer (rgeos package) to add a ring of x micron or pixels to each cell.
+* Use extr_OriginalCells to get the pixel values inside this larger ring. 
+* Remove all pixels that are inside the smaller ring (the cell).
+* Compute 1) the average intensity of the pixels (+sd, etc) 2) 
+
+```{r}
+
+## function for making a region around the cell
+
+
+makeBuffer <- function(dataset, width_pixels){
+  dataset$unique <- paste(dataset$frame, dataset$cell, sep="_")
+  out <- lapply(unique(dataset$unique), function(W){
+    rgeos::gBuffer(sp::SpatialPointsDataFrame(coords=dataset[dataset$unique==W,][,c("X", "Y")], data=dataset[dataset$unique==W,]), width= width_pixels)@polygons[[1]]@Polygons[[1]]@coords |>
+      data.frame() |> 
+      mutate(cell = unique(dataset$cell[dataset$unique==W]),
+             frame = unique(dataset$frame[dataset$unique==W]))
+  }) |> 
+    bind_rows() |>
+    rename(X=x, Y=y) |>
+    left_join(unique(dataset[,c("cell", "frame", "area", "pole1", "pole2", "max.length", "max.width", "angle", "Xmid", "Ymid", "maxwum", "max_um", "area_um")]))
+  return(out)
+}
+
+#dataset = morph$mesh
+#width_pixels = 0.1 / morph$pixel2um
+buffered <- makeBuffer(morph$mesh, width_pixels = 0.2/morph$pixel2um)
+
+#take values of each cell
+cellsbuffered <- extr_OriginalCells(capsule, buffered, turnCell=FALSE) |> mutate(values = values - min(values))
+cells_mSc <- extr_OriginalCells(mScarlet, morph$mesh, turnCell=FALSE) |> mutate(values = values - min(values))
+cells_YFP <- extr_OriginalCells(YFP, morph$mesh, turnCell=FALSE) |> mutate(values = values - min(values))
+cells_mTQ <- extr_OriginalCells(mTurquoise, morph$mesh, turnCell=FALSE) |> mutate(values = values - min(values))
+
+#remove inside of buffered cell
+onlybuffer <- cellsbuffered |> anti_join(select(cells_mSc, -values)) #note that this could have been YFP, mTQ as well. it's just the mask.
+onlybuffer_onePC <- onlybuffer |>
+  select(-x, -y) |>
+  onePerCell() |> 
+  rename(mean_capsule = mean,
+         sd_capsule = sd)
+
+bgbuf <- quantile(cellsbuffered$values, 0.7)
+
+onlybuffercount <- onlybuffer[onlybuffer$values>bgbuf,] |> group_by(cell) |>  summarize(capsulesize = n()) |> full_join(onlybuffer_onePC)
+allcolors <- combineDataframes(list(cells_mSc, cells_YFP, cells_mTQ), listofchannels=list("mScarlet", "YFP", "mTurquoise"))$finalframe |> 
+  group_by(cell, frame, channel) |> summarize(values_mean = mean(values),
+                                              values_sd = sd(values),
+                                              cellsizepix = n()) |>
+  left_join(onlybuffercount) |> mutate(capsize_cor = capsulesize/cellsizepix)
+
+```
+
+
+```{r}
+plotcors <- ggplot(allcolors, aes(x=capsize_cor, y=values_mean, color=channel)) + 
+  geom_point() + geom_smooth(method="lm", fill=NA) + 
+  scale_x_log10() + 
+  scale_y_log10() + 
+  ggpubr::stat_regline_equation(aes(label=..rr.label..)) + 
+  scale_color_manual(values=c("mScarlet" = "#e71e28", "YFP" = "#c69448", "mTurquoise" = "#52a5bd")) + 
+  theme_minimal() + 
+  xlab("capsule size (pixels)") + 
+  ylab("mean fluorescence intensity inside cell (AU)")
+
+ggsave(plotcors, width=10, height=10, filename="FPvsCapsule.pdf")
+save(allcolors, file = "allcolors.Rda")
+save(morph, file="phase_morphometrics.Rda")
+save(cells_mSc, file= "cells_mScarlet.Rda")
+save(cells_YFP, file = "cells_YFP.Rda")
+save(cells_mTQ, file= "cells_mTurquoise.Rda")
+save(onlybuffer, file= "cells_buffered.Rda")
+```
+
